@@ -2,7 +2,7 @@
 // Miska: https://github.com/l429609201/misaka_danmu_server
 // 兼容弹弹play API v2 规范
 
-const WidgetMetadata = {
+WidgetMetadata = {
     id: "danmu_misaka",
     title: "Miska 弹幕",
     version: "1.0.0",
