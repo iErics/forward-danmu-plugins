@@ -5,7 +5,7 @@
 WidgetMetadata = {
     id: "miska.danmu",
     title: "Miska 弹幕",
-    version: "1.1.0",
+    version: "1.1.1",
     requiredVersion: "0.0.2",
     description: "从 Miska 弹幕服务器获取弹幕数据，支持搜索番剧、获取分集列表和弹幕内容",
     author: "Forward-Danmu",
@@ -133,7 +133,7 @@ async function searchDanmu(params) {
     }
 
     // 并发：search/anime（触发匹配管道）+ search/episodes（库内集数）
-    const animeUrl = buildUrl(server, "search/anime", { keyword: title, anime: title });
+    const animeUrl = buildUrl(server, "search/anime", { keyword: title });
     const epUrl = buildUrl(server, "search/episodes", { anime: title, episode: episode || "" });
     console.log(`[Miska] 并发搜索`);
 
