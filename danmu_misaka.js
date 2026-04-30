@@ -3,9 +3,9 @@
 // 兼容弹弹play API v2 规范
 
 WidgetMetadata = {
-    id: "danmu_misaka",
+    id: "miska.danmu",
     title: "Miska 弹幕",
-    version: "1.0.0",
+    version: "1.0.1",
     requiredVersion: "0.0.2",
     description: "从 Miska 弹幕服务器获取弹幕数据，支持搜索番剧、获取分集列表和弹幕内容",
     author: "Forward-Danmu",
