@@ -5,7 +5,7 @@
 WidgetMetadata = {
     id: "miska.danmu",
     title: "Miska 弹幕",
-    version: "1.0.1",
+    version: "1.0.2",
     requiredVersion: "0.0.2",
     description: "从 Miska 弹幕服务器获取弹幕数据，支持搜索番剧、获取分集列表和弹幕内容",
     author: "Forward-Danmu",
@@ -91,7 +91,7 @@ function parseBlockKeywords(raw) {
 
 /**
  * 搜索弹幕资源
- * 并发请求 search/anime 和 search/episodes，按标题去重合并
+ * 仅使用 search/episodes，只返回库内已有弹幕的源
  */
 async function searchDanmu(params) {
     const { server, title: rawTitle, episode } = params;
@@ -99,41 +99,21 @@ async function searchDanmu(params) {
 
     if (!server || !title) return { animes: [] };
 
-    const animeUrl = buildUrl(server, "search/anime", { keyword: title, anime: title });
     const epUrl = buildUrl(server, "search/episodes", { anime: title, episode: episode || "" });
+    console.log(`[Miska] 搜索: ${epUrl}`);
 
-    console.log(`[Miska] 并发搜索`);
-    let animeData, epData;
     try {
-        const [res1, res2] = await Promise.all([
-            Widget.http.get(animeUrl, { headers: requestHeaders }),
-            Widget.http.get(epUrl, { headers: requestHeaders })
-        ]);
-        animeData = res1 ? res1.data : null;
-        epData = res2 ? res2.data : null;
+        const response = await Widget.http.get(epUrl, { headers: requestHeaders });
+        if (!response || !response.data || !response.data.animes) {
+            console.log(`[Miska] 未找到匹配番剧: ${title}`);
+            return { animes: [] };
+        }
+        console.log(`[Miska] 搜索到 ${response.data.animes.length} 个番剧`);
+        return { animes: response.data.animes };
     } catch (e) {
         console.log(`[Miska] 搜索异常: ${e}`);
         return { animes: [] };
     }
-
-    // 按标题去重合并：search/anime 优先（含 bangumiId），search/episodes 补充
-    const merged = {};
-    if (animeData && animeData.animes) {
-        for (const item of animeData.animes) {
-            const key = (item.animeTitle || "").trim();
-            if (key) merged[key] = item;
-        }
-    }
-    if (epData && epData.animes) {
-        for (const item of epData.animes) {
-            const key = (item.animeTitle || "").trim();
-            if (key && !merged[key]) merged[key] = item;
-        }
-    }
-
-    const animes = Object.values(merged);
-    console.log(`[Miska] 搜索到 ${animes.length} 个番剧`);
-    return { animes };
 }
 
 /**
