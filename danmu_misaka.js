@@ -2,7 +2,7 @@
 // Miska: https://github.com/l429609201/misaka_danmu_server
 // 兼容弹弹play API v2 规范
 
-const WidgetMetadata = {
+WidgetMetadata = {
     id: "danmu_misaka",
     title: "Miska 弹幕",
     version: "1.0.0",
@@ -18,7 +18,7 @@ const WidgetMetadata = {
             placeholders: [
                 {
                     title: "Miska 服务器地址（含 Token）",
-                    value: "https://your-server.com/your-token"
+                    value: ""
                 }
             ]
         },
@@ -26,13 +26,14 @@ const WidgetMetadata = {
             name: "maxCount",
             title: "弹幕数量上限",
             type: "input",
-            defaultValue: "0",
+            value: "0",
             description: "0 表示不限制，超出时按时间均匀采样"
         },
         {
             name: "blockKeywords",
             title: "屏蔽关键词",
             type: "input",
+            value: "",
             description: "包含这些关键词的弹幕将被过滤，逗号分隔"
         }
     ],
@@ -61,29 +62,21 @@ const WidgetMetadata = {
     ]
 };
 
-// ---------------------------------------------------------------------------
-// 辅助函数
-// ---------------------------------------------------------------------------
-
 function buildUrl(server, path, query) {
     var base = server.replace(/\/+$/, "");
     var url = base + "/api/v2/" + path;
-    if (query) {
-        var keys = Object.keys(query);
-        if (keys.length > 0) {
-            var parts = [];
-            for (var i = 0; i < keys.length; i++) {
-                var k = keys[i];
-                var v = query[k];
-                if (v != null && v !== "") {
-                    parts.push(encodeURIComponent(k) + "=" + encodeURIComponent(v));
-                }
-            }
-            if (parts.length > 0) {
-                url += "?" + parts.join("&");
-            }
+    if (!query) return url;
+    var keys = Object.keys(query);
+    if (keys.length === 0) return url;
+    var parts = [];
+    for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        var v = query[k];
+        if (v != null && v !== "") {
+            parts.push(encodeURIComponent(k) + "=" + encodeURIComponent(v));
         }
     }
+    if (parts.length > 0) url += "?" + parts.join("&");
     return url;
 }
 
@@ -119,12 +112,8 @@ function limitComments(comments, maxCount) {
             accumulated -= step;
         }
     }
-    if (result.length > 0 && result[0] !== comments[0]) {
-        result[0] = comments[0];
-    }
-    if (result.length > 1 && result[result.length - 1] !== comments[comments.length - 1]) {
-        result[result.length - 1] = comments[comments.length - 1];
-    }
+    if (result.length > 0 && result[0] !== comments[0]) result[0] = comments[0];
+    if (result.length > 1 && result[result.length - 1] !== comments[comments.length - 1]) result[result.length - 1] = comments[comments.length - 1];
     return result;
 }
 
@@ -132,23 +121,15 @@ function limitComments(comments, maxCount) {
 // 模块处理函数
 // ---------------------------------------------------------------------------
 
-/**
- * 搜索弹幕资源
- * 并发请求 search/anime 和 search/episodes，按标题去重合并
- * @returns {{animes: Array}} 包装对象
- */
 async function searchDanmu(params) {
     var server = params.server || "";
-    if (!server) {
-        throw new Error("请配置 Miska 服务器地址");
-    }
-
     var title = (params.title || "").trim();
-    if (!title) {
+
+    if (!server || !title) {
         return { animes: [] };
     }
 
-    // 并发请求两个端点
+    var headers = getHeaders();
     var animeUrl = buildUrl(server, "search/anime", { keyword: title, anime: title });
     var epUrl = buildUrl(server, "search/episodes", { anime: title, episode: params.episode || "" });
 
@@ -158,21 +139,20 @@ async function searchDanmu(params) {
     var epData = null;
     try {
         var responses = await Promise.all([
-            Widget.http.get(animeUrl, { headers: getHeaders() }),
-            Widget.http.get(epUrl, { headers: getHeaders() })
+            Widget.http.get(animeUrl, { headers: headers }),
+            Widget.http.get(epUrl, { headers: headers })
         ]);
         animeData = responses[0] ? responses[0].data : null;
         epData = responses[1] ? responses[1].data : null;
     } catch (e) {
         console.log("[Miska] 搜索请求异常: " + e);
-        throw new Error("搜索请求失败: " + (e.message || "网络错误"));
+        return { animes: [] };
     }
 
-    // 用 animeTitle 去重合并
+    // 按标题去重合并
     var merged = {};
     var key;
 
-    // search/anime: 提供 bangumiId
     if (animeData && animeData.animes) {
         for (var i = 0; i < animeData.animes.length; i++) {
             var item = animeData.animes[i];
@@ -194,19 +174,13 @@ async function searchDanmu(params) {
         }
     }
 
-    // search/episodes: 提供分集列表
     if (epData && epData.animes) {
         for (var j = 0; j < epData.animes.length; j++) {
             var epItem = epData.animes[j];
             key = (epItem.animeTitle || "").trim();
             if (key && merged[key]) {
-                // 已存在，补充分集数量和 animeId
-                if (!merged[key].animeId && epItem.animeId) {
-                    merged[key].animeId = epItem.animeId;
-                }
-                if (epItem.episodes) {
-                    merged[key].episodeCount = epItem.episodes.length;
-                }
+                if (!merged[key].animeId && epItem.animeId) merged[key].animeId = epItem.animeId;
+                if (epItem.episodes) merged[key].episodeCount = epItem.episodes.length;
             } else if (key) {
                 merged[key] = {
                     animeId: epItem.animeId,
@@ -243,74 +217,40 @@ async function searchDanmu(params) {
         });
     }
 
-    console.log("[Miska] 搜索到 " + animes.length + " 个番剧（去重合并后）");
-
-    if (animes.length === 0) {
-        return { animes: [] };
-    }
-
+    console.log("[Miska] 搜索到 " + animes.length + " 个番剧");
     return { animes: animes };
 }
 
-/**
- * 获取番剧详情（分集列表）
- * @returns {Array} episodes 数组
- */
 async function getDetailById(params) {
     var server = params.server || "";
-    if (!server) {
-        throw new Error("请配置 Miska 服务器地址");
-    }
-
     var animeId = params.animeId;
-    if (!animeId) {
-        console.log("[Miska] getDetailById: 缺少 animeId");
-        return [];
-    }
 
-    // bangumi 端点要求 "A{animeId}" 格式
+    if (!server || !animeId) return [];
+
     var animeIdStr = String(animeId);
     var bangumiId = animeIdStr.charAt(0) === "A" ? animeIdStr : "A" + animeIdStr;
 
     var url = buildUrl(server, "bangumi/" + bangumiId);
-    console.log("[Miska] 获取番剧详情: " + url);
+    console.log("[Miska] 获取详情: " + url);
 
-    var response;
     try {
-        response = await Widget.http.get(url, { headers: getHeaders() });
+        var response = await Widget.http.get(url, { headers: getHeaders() });
+        if (!response) return [];
+        var data = response.data;
+        if (!data || !data.bangumi || !data.bangumi.episodes) return [];
+        console.log("[Miska] 获取到 " + data.bangumi.episodes.length + " 个分集");
+        return data.bangumi.episodes;
     } catch (e) {
-        console.log("[Miska] getDetailById 请求异常: " + e);
+        console.log("[Miska] getDetailById 异常: " + e);
         return [];
     }
-
-    if (!response) {
-        return [];
-    }
-
-    var data = response.data;
-    if (!data || !data.bangumi || !data.bangumi.episodes) {
-        console.log("[Miska] 获取分集失败: bangumiId=" + bangumiId);
-        return [];
-    }
-
-    console.log("[Miska] 获取到 " + data.bangumi.episodes.length + " 个分集");
-    return data.bangumi.episodes;
 }
 
-/**
- * 获取弹幕内容
- * @returns {object} 弹幕响应数据（含 comments 数组）
- */
 async function getCommentsById(params) {
     var server = params.server || "";
-    if (!server) {
-        throw new Error("请配置 Miska 服务器地址");
-    }
-
     var commentId = params.commentId;
-    if (!commentId) {
-        return null;
-    }
+
+    if (!server || !commentId) return null;
 
     var url = buildUrl(server, "comment/" + commentId, {
         withRelated: "true",
@@ -323,46 +263,38 @@ async function getCommentsById(params) {
     try {
         response = await Widget.http.get(url, { headers: getHeaders() });
     } catch (e) {
-        console.log("[Miska] getCommentsById 请求异常: " + e);
+        console.log("[Miska] getCommentsById 异常: " + e);
         return null;
     }
 
-    if (!response) {
-        return null;
-    }
+    if (!response) return null;
 
     var data = response.data;
     if (!data || !data.comments) {
         if (data && data.count === 0) {
-            console.log("[Miska] 弹幕尚未入库 (episodeId=" + commentId + ")，Miska 后台可能正在下载");
-        } else {
-            console.log("[Miska] 获取弹幕失败: episodeId=" + commentId);
+            console.log("[Miska] 弹幕尚未入库 (episodeId=" + commentId + ")，后台可能正在下载");
         }
         return null;
     }
 
-    var comments = data.comments;
-    console.log("[Miska] 获取到 " + comments.length + " 条弹幕 (episodeId=" + commentId + ")");
+    console.log("[Miska] 获取到 " + data.comments.length + " 条弹幕");
 
     // 屏蔽词过滤
     var blockKeywords = parseBlockKeywords(params.blockKeywords || "");
     if (blockKeywords.length > 0) {
-        var before = comments.length;
-        comments = comments.filter(function(c) {
+        var before = data.comments.length;
+        data.comments = data.comments.filter(function(c) {
             return !isBlocked(c.m, blockKeywords);
         });
-        if (comments.length < before) {
-            console.log("[Miska] 屏蔽词过滤: " + before + " → " + comments.length);
-        }
+        console.log("[Miska] 屏蔽词过滤: " + before + " → " + data.comments.length);
     }
 
     // 数量限制
     var maxCount = parseInt(params.maxCount) || 0;
-    if (maxCount > 0 && comments.length > maxCount) {
-        comments = limitComments(comments, maxCount);
-        console.log("[Miska] 数量限制: 截取至 " + comments.length + " 条");
+    if (maxCount > 0 && data.comments.length > maxCount) {
+        data.comments = limitComments(data.comments, maxCount);
+        console.log("[Miska] 截取至 " + data.comments.length + " 条");
     }
 
-    data.comments = comments;
     return data;
 }
