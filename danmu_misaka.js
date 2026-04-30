@@ -5,7 +5,7 @@
 WidgetMetadata = {
     id: "miska.danmu",
     title: "Miska 弹幕",
-    version: "1.0.8",
+    version: "1.0.9",
     requiredVersion: "0.0.2",
     description: "从 Miska 弹幕服务器获取弹幕数据，支持搜索番剧、获取分集列表和弹幕内容",
     author: "Forward-Danmu",
@@ -91,7 +91,8 @@ function parseBlockKeywords(raw) {
 
 /**
  * 搜索弹幕资源
- * 优先 search/episodes（库内有弹幕），无结果时降级 search/anime（后备，按标题去重）
+ * 优先 search/episodes（库内有弹幕），无结果时降级 search/anime（后备）
+ * 统一按标题去重，过滤后无匹配集的直接丢弃
  */
 async function searchDanmu(params) {
     const { server, title: rawTitle, episode } = params;
@@ -101,6 +102,37 @@ async function searchDanmu(params) {
 
     const currentEp = parseInt(episode) || 0;
 
+    function cleanTitle(t) {
+        return (t || "").replace(/（(?:库内|搜索)[^）]*）/g, "").trim();
+    }
+
+    function filterEpisodes(anime) {
+        if (anime.animeTitle) anime.animeTitle = cleanTitle(anime.animeTitle);
+        if (currentEp > 0 && anime.episodes && anime.episodes.length > 0) {
+            anime.episodes = anime.episodes.filter(ep => {
+                const m = ep.episodeTitle ? ep.episodeTitle.match(/\d+/) : null;
+                return m && parseInt(m[0]) === currentEp;
+            });
+        }
+        return anime;
+    }
+
+    function dedupByTitle(list) {
+        const seen = {};
+        const result = [];
+        for (const item of list) {
+            const key = item.animeTitle || String(item.animeId);
+            if (!seen[key]) {
+                seen[key] = true;
+                // 只保留过滤后还有 episode 的
+                if (!currentEp || !item.episodes || item.episodes.length > 0) {
+                    result.push(item);
+                }
+            }
+        }
+        return result;
+    }
+
     // 1) 库内搜索
     const epUrl = buildUrl(server, "search/episodes", { anime: title, episode: episode || "" });
     console.log(`[Miska] 库内搜索: ${epUrl}`);
@@ -108,44 +140,27 @@ async function searchDanmu(params) {
     try {
         const epRes = await Widget.http.get(epUrl, { headers: requestHeaders });
         if (epRes && epRes.data && epRes.data.animes && epRes.data.animes.length > 0) {
-            const animes = epRes.data.animes.map(anime => {
-                if (anime.animeTitle) {
-                    anime.animeTitle = anime.animeTitle.replace(/（(?:库内|搜索)[^）]*）/g, "").trim();
-                }
-                if (currentEp > 0 && anime.episodes && anime.episodes.length > 0) {
-                    anime.episodes = anime.episodes.filter(ep => {
-                        const m = ep.episodeTitle ? ep.episodeTitle.match(/\d+/) : null;
-                        return m && parseInt(m[0]) === currentEp;
-                    });
-                }
-                return anime;
-            });
-            console.log(`[Miska] 库内找到 ${animes.length} 个番剧`);
-            return { animes };
+            const animes = dedupByTitle(epRes.data.animes.map(filterEpisodes));
+            if (animes.length > 0) {
+                console.log(`[Miska] 库内找到 ${animes.length} 个番剧`);
+                return { animes };
+            }
         }
     } catch (e) {
         console.log(`[Miska] 库内搜索异常: ${e}`);
     }
 
-    // 2) 后备搜索：search/anime，按标题去重
+    // 2) 后备搜索：search/anime
     console.log(`[Miska] 库内无结果，后备搜索`);
     const animeUrl = buildUrl(server, "search/anime", { keyword: title, anime: title });
 
     try {
         const animeRes = await Widget.http.get(animeUrl, { headers: requestHeaders });
         if (animeRes && animeRes.data && animeRes.data.animes) {
-            const seen = {};
-            const animes = [];
-            for (const anime of animeRes.data.animes) {
-                if (anime.animeTitle) {
-                    anime.animeTitle = anime.animeTitle.replace(/（(?:库内|搜索)[^）]*）/g, "").trim();
-                }
-                const key = anime.animeTitle || String(anime.animeId);
-                if (!seen[key]) {
-                    seen[key] = true;
-                    animes.push(anime);
-                }
-            }
+            const animes = dedupByTitle(animeRes.data.animes.map(a => {
+                if (a.animeTitle) a.animeTitle = cleanTitle(a.animeTitle);
+                return a;
+            }));
             console.log(`[Miska] 后备搜索找到 ${animes.length} 个番剧（去重后）`);
             return { animes };
         }
