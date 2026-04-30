@@ -91,7 +91,7 @@ function parseBlockKeywords(raw) {
 
 /**
  * 搜索弹幕资源
- * 仅使用 search/episodes 获取库内弹幕源
+ * 使用 search/episodes 获取库内弹幕源
  */
 async function searchDanmu(params) {
     const { server, title: rawTitle, episode } = params;
@@ -99,25 +99,21 @@ async function searchDanmu(params) {
 
     if (!server || !title) return { animes: [] };
 
-    const url = buildUrl(server, "search/episodes", { anime: title, episode: episode || "" });
-    console.log(`[Miska] 搜索: ${url}`);
+    const epUrl = buildUrl(server, "search/episodes", { anime: title, episode: episode || "" });
+    console.log(`[Miska] 搜索: ${epUrl}`);
 
-    let data;
     try {
-        const response = await Widget.http.get(url, { headers: requestHeaders });
-        data = response ? response.data : null;
+        const response = await Widget.http.get(epUrl, { headers: requestHeaders });
+        if (!response || !response.data || !response.data.animes) {
+            console.log(`[Miska] 未找到匹配番剧: ${title}`);
+            return { animes: [] };
+        }
+        console.log(`[Miska] 搜索到 ${response.data.animes.length} 个番剧`);
+        return { animes: response.data.animes };
     } catch (e) {
         console.log(`[Miska] 搜索异常: ${e}`);
         return { animes: [] };
     }
-
-    if (!data || !data.animes || data.animes.length === 0) {
-        console.log(`[Miska] 未找到匹配番剧: ${title}`);
-        return { animes: [] };
-    }
-
-    console.log(`[Miska] 搜索到 ${data.animes.length} 个番剧`);
-    return { animes: data.animes };
 }
 
 /**
