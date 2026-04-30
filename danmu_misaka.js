@@ -1,10 +1,13 @@
-// Miska 弹幕插件
-WidgetMetadata = {
+// Miska 弹幕插件 — 为 Forward 播放器提供 Miska 弹幕服务器支持
+// Miska: https://github.com/l429609201/misaka_danmu_server
+// 兼容弹弹play API v2 规范
+
+const WidgetMetadata = {
     id: "danmu_misaka",
     title: "Miska 弹幕",
     version: "1.0.0",
     requiredVersion: "0.0.2",
-    description: "从 Miska 弹幕服务器获取弹幕数据",
+    description: "从 Miska 弹幕服务器获取弹幕数据，支持搜索番剧、获取分集列表和弹幕内容",
     author: "Forward-Danmu",
     site: "https://github.com/iErics/forward-danmu-plugins",
     globalParams: [
@@ -57,147 +60,165 @@ WidgetMetadata = {
     ]
 };
 
+// ---------------------------------------------------------------------------
 // 辅助函数
+// ---------------------------------------------------------------------------
+
 function buildUrl(server, path, query) {
-    var base = server.replace(/\/+$/, "");
-    var url = base + "/api/v2/" + path;
+    let base = server.replace(/\/+$/, "");
+    let url = `${base}/api/v2/${path}`;
     if (!query) return url;
-    var parts = [];
-    var keys = Object.keys(query);
-    for (var i = 0; i < keys.length; i++) {
-        var k = keys[i], v = query[k];
-        if (v != null && v !== "") parts.push(encodeURIComponent(k) + "=" + encodeURIComponent(v));
-    }
+    let parts = Object.entries(query)
+        .filter(([, v]) => v != null && v !== "")
+        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`);
     if (parts.length) url += "?" + parts.join("&");
     return url;
 }
 
-function getHeaders() {
-    return {
-        "Content-Type": "application/json",
-        "User-Agent": "ForwardWidgets/1.0.0"
-    };
+const requestHeaders = {
+    "Content-Type": "application/json",
+    "User-Agent": "ForwardWidgets/1.0.0"
+};
+
+function parseBlockKeywords(raw) {
+    if (!raw || !raw.trim()) return [];
+    return raw.split(/[,，]/).map(k => k.trim()).filter(k => k);
 }
 
-// searchDanmu: 并发搜索两个端点，按标题去重合并
+// ---------------------------------------------------------------------------
+// 模块处理函数
+// ---------------------------------------------------------------------------
+
+/**
+ * 搜索弹幕资源
+ * 并发请求 search/anime 和 search/episodes，按标题去重合并
+ */
 async function searchDanmu(params) {
-    var server = params.server, title = (params.title || "").trim();
+    const { server, title: rawTitle, episode } = params;
+    const title = (rawTitle || "").trim();
+
     if (!server || !title) return { animes: [] };
 
-    var headers = getHeaders();
-    var animeUrl = buildUrl(server, "search/anime", { keyword: title, anime: title });
-    var epUrl = buildUrl(server, "search/episodes", { anime: title, episode: params.episode || "" });
+    const animeUrl = buildUrl(server, "search/anime", { keyword: title, anime: title });
+    const epUrl = buildUrl(server, "search/episodes", { anime: title, episode: episode || "" });
 
-    console.log("[Miska] 并发搜索");
-    var animeData = null, epData = null;
+    console.log(`[Miska] 并发搜索`);
+    let animeData, epData;
     try {
-        var responses = await Promise.all([
-            Widget.http.get(animeUrl, { headers: headers }),
-            Widget.http.get(epUrl, { headers: headers })
+        const [res1, res2] = await Promise.all([
+            Widget.http.get(animeUrl, { headers: requestHeaders }),
+            Widget.http.get(epUrl, { headers: requestHeaders })
         ]);
-        animeData = responses[0] ? responses[0].data : null;
-        epData = responses[1] ? responses[1].data : null;
+        animeData = res1 ? res1.data : null;
+        epData = res2 ? res2.data : null;
     } catch (e) {
-        console.log("[Miska] 搜索异常: " + e);
+        console.log(`[Miska] 搜索异常: ${e}`);
         return { animes: [] };
     }
 
-    // 按标题去重合并
-    var merged = {};
+    // 按标题去重合并：search/anime 优先（含 bangumiId），search/episodes 补充
+    const merged = {};
     if (animeData && animeData.animes) {
-        for (var i = 0; i < animeData.animes.length; i++) {
-            var item = animeData.animes[i], key = (item.animeTitle || "").trim();
+        for (const item of animeData.animes) {
+            const key = (item.animeTitle || "").trim();
             if (key) merged[key] = item;
         }
     }
     if (epData && epData.animes) {
-        for (var j = 0; j < epData.animes.length; j++) {
-            var epItem = epData.animes[j], key = (epItem.animeTitle || "").trim();
-            if (key && !merged[key]) merged[key] = epItem;
+        for (const item of epData.animes) {
+            const key = (item.animeTitle || "").trim();
+            if (key && !merged[key]) merged[key] = item;
         }
     }
 
-    var animes = [];
-    var mkeys = Object.keys(merged);
-    for (var k = 0; k < mkeys.length; k++) {
-        animes.push(merged[mkeys[k]]);
-    }
-
-    console.log("[Miska] 搜索到 " + animes.length + " 个番剧");
-    return { animes: animes };
+    const animes = Object.values(merged);
+    console.log(`[Miska] 搜索到 ${animes.length} 个番剧`);
+    return { animes };
 }
 
-// getDetailById: 获取番剧分集列表
+/**
+ * 获取番剧详情（分集列表）
+ */
 async function getDetailById(params) {
-    var server = params.server, animeId = params.animeId;
+    const { server, animeId } = params;
     if (!server || !animeId) return [];
 
-    var animeIdStr = String(animeId);
-    var bangumiId = animeIdStr.charAt(0) === "A" ? animeIdStr : "A" + animeIdStr;
+    // bangumi 端点要求 "A{animeId}" 格式
+    const animeIdStr = String(animeId);
+    const bangumiId = animeIdStr.startsWith("A") ? animeIdStr : `A${animeIdStr}`;
 
     try {
-        var response = await Widget.http.get(
-            buildUrl(server, "bangumi/" + bangumiId),
-            { headers: getHeaders() }
+        const response = await Widget.http.get(
+            buildUrl(server, `bangumi/${bangumiId}`),
+            { headers: requestHeaders }
         );
         if (response && response.data && response.data.bangumi) {
+            console.log(`[Miska] 获取到 ${response.data.bangumi.episodes.length} 个分集`);
             return response.data.bangumi.episodes;
         }
     } catch (e) {
-        console.log("[Miska] getDetailById 异常: " + e);
+        console.log(`[Miska] getDetailById 异常: ${e}`);
     }
     return [];
 }
 
-// getCommentsById: 获取弹幕内容
+/**
+ * 获取弹幕内容
+ * 支持屏蔽词过滤和数量限制
+ */
 async function getCommentsById(params) {
-    var server = params.server, commentId = params.commentId;
+    const { server, commentId, blockKeywords, maxCount: rawMax } = params;
     if (!server || !commentId) return null;
 
     try {
-        var response = await Widget.http.get(
-            buildUrl(server, "comment/" + commentId, { withRelated: "true", chConvert: "0" }),
-            { headers: getHeaders() }
+        const response = await Widget.http.get(
+            buildUrl(server, `comment/${commentId}`, { withRelated: "true", chConvert: "0" }),
+            { headers: requestHeaders }
         );
         if (!response || !response.data) return null;
 
-        var data = response.data;
-
-        // 屏蔽词过滤
-        var keywords = (params.blockKeywords || "").trim();
-        if (keywords && data.comments) {
-            var list = keywords.split(/[,，]/).map(function(k) { return k.trim(); }).filter(function(k) { return k; });
-            if (list.length > 0) {
-                var before = data.comments.length;
-                data.comments = data.comments.filter(function(c) {
-                    for (var i = 0; i < list.length; i++) {
-                        if (c.m && c.m.indexOf(list[i]) !== -1) return false;
-                    }
-                    return true;
-                });
-                console.log("[Miska] 屏蔽过滤: " + before + " → " + data.comments.length);
+        const data = response.data;
+        if (!data.comments) {
+            if (data.count === 0) {
+                console.log(`[Miska] 弹幕尚未入库 (episodeId=${commentId})，后台可能正在下载`);
             }
+            return null;
         }
 
-        // 数量限制
-        var maxCount = parseInt(params.maxCount) || 0;
-        if (maxCount > 0 && data.comments && data.comments.length > maxCount) {
-            var step = data.comments.length / maxCount;
-            var result = [], acc = 0;
-            for (var i = 0; i < data.comments.length; i++) {
+        console.log(`[Miska] 获取到 ${data.comments.length} 条弹幕`);
+
+        // 屏蔽词过滤
+        const keywords = parseBlockKeywords(blockKeywords || "");
+        if (keywords.length > 0) {
+            const before = data.comments.length;
+            data.comments = data.comments.filter(c => !keywords.some(kw => c.m && c.m.includes(kw)));
+            console.log(`[Miska] 屏蔽过滤: ${before} → ${data.comments.length}`);
+        }
+
+        // 数量限制（间隔均匀采样）
+        const maxCount = parseInt(rawMax) || 0;
+        if (maxCount > 0 && data.comments.length > maxCount) {
+            const step = data.comments.length / maxCount;
+            const result = [];
+            let acc = 0;
+            for (const c of data.comments) {
                 acc += 1;
-                if (acc >= step) { result.push(data.comments[i]); acc -= step; }
+                if (acc >= step) { result.push(c); acc -= step; }
             }
-            if (result.length > 0 && result[0] !== data.comments[0]) result[0] = data.comments[0];
-            var last = data.comments.length - 1;
-            if (result.length > 1 && result[result.length - 1] !== data.comments[last]) result[result.length - 1] = data.comments[last];
+            if (result.length > 0 && result[0] !== data.comments[0]) {
+                result[0] = data.comments[0];
+            }
+            const lastIdx = data.comments.length - 1;
+            if (result.length > 1 && result[result.length - 1] !== data.comments[lastIdx]) {
+                result[result.length - 1] = data.comments[lastIdx];
+            }
             data.comments = result;
-            console.log("[Miska] 截取至 " + data.comments.length + " 条");
+            console.log(`[Miska] 截取至 ${data.comments.length} 条`);
         }
 
         return data;
     } catch (e) {
-        console.log("[Miska] getCommentsById 异常: " + e);
+        console.log(`[Miska] getCommentsById 异常: ${e}`);
         return null;
     }
 }
