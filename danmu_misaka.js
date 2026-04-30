@@ -5,7 +5,7 @@
 WidgetMetadata = {
     id: "miska.danmu",
     title: "Miska 弹幕",
-    version: "1.0.4",
+    version: "1.0.5",
     requiredVersion: "0.0.2",
     description: "从 Miska 弹幕服务器获取弹幕数据，支持搜索番剧、获取分集列表和弹幕内容",
     author: "Forward-Danmu",
@@ -152,10 +152,10 @@ async function searchDanmu(params) {
 }
 
 /**
- * 获取番剧详情（分集列表）
+ * 获取番剧详情（分集列表），仅保留当前集
  */
 async function getDetailById(params) {
-    const { server, animeId } = params;
+    const { server, animeId, episode } = params;
     if (!server || !animeId) return [];
 
     // bangumi 端点要求 "A{animeId}" 格式
@@ -168,8 +168,14 @@ async function getDetailById(params) {
             { headers: requestHeaders }
         );
         if (response && response.data && response.data.bangumi) {
-            console.log(`[Miska] 获取到 ${response.data.bangumi.episodes.length} 个分集`);
-            return response.data.bangumi.episodes;
+            const episodes = response.data.bangumi.episodes || [];
+            const ep = episode ? String(episode).trim() : "";
+            // 仅保留当前集
+            const filtered = ep
+                ? episodes.filter(e => String(e.episodeNumber || "") === ep)
+                : episodes;
+            console.log(`[Miska] 获取到 ${episodes.length} 个分集，过滤后 ${filtered.length} 个`);
+            return filtered;
         }
     } catch (e) {
         console.log(`[Miska] getDetailById 异常: ${e}`);
