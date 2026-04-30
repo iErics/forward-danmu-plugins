@@ -5,7 +5,7 @@
 WidgetMetadata = {
     id: "miska.danmu",
     title: "Miska 弹幕",
-    version: "1.5.0",
+    version: "1.6.0",
     requiredVersion: "0.0.2",
     description: "从 Miska 弹幕服务器获取弹幕数据，支持搜索番剧、获取分集列表和弹幕内容",
     author: "Forward-Danmu",
@@ -82,8 +82,8 @@ function buildUrl(server, path, query) {
     return url;
 }
 
-// 触发 /match 端点（fire-and-forget，启动下载管道）
-function fireMatch(server, title, season, episode) {
+// 调用 /match 端点，返回 "matched" | "timeout" | "miss"
+async function awaitMatch(server, title, season, episode, timeoutSec) {
     const base = server.replace(/\/+$/, "");
     let fileName = title;
     const s = parseInt(season) || 0;
@@ -93,10 +93,34 @@ function fireMatch(server, title, season, episode) {
     } else if (e > 0) {
         fileName = `${title} 第${e}集`;
     }
-    console.log(`[Miska] 触发匹配: ${fileName}`);
-    Widget.http.post(`${base}/match`, { fileName }, { headers: requestHeaders })
-        .then(res => console.log(`[Miska] 匹配响应: isMatched=${res && res.data ? res.data.isMatched : "?"}`))
-        .catch(err => console.log(`[Miska] 匹配异常: ${err}`));
+    console.log(`[Miska] 匹配: ${fileName} (超时 ${timeoutSec}s)`);
+    try {
+        const res = await Promise.race([
+            Widget.http.post(`${base}/match`, { fileName }, { headers: requestHeaders }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), timeoutSec * 1000))
+        ]);
+        if (res && res.data && res.data.isMatched) {
+            console.log(`[Miska] 匹配成功`);
+            return "matched";
+        }
+        console.log(`[Miska] 匹配未命中`);
+        return "miss";
+    } catch (err) {
+        const isTimeout = err.message === "timeout";
+        console.log(`[Miska] 匹配${isTimeout ? "超时" : "异常"}: ${err}`);
+        return isTimeout ? "timeout" : "miss";
+    }
+}
+
+// 调 search/anime 触发后备搜索下载弹幕
+async function triggerDownload(server, title) {
+    const url = buildUrl(server, "search/anime", { keyword: title });
+    console.log(`[Miska] 触发后备搜索下载`);
+    try {
+        await Widget.http.get(url, { headers: requestHeaders });
+    } catch (e) {
+        console.log(`[Miska] 后备搜索异常: ${e}`);
+    }
 }
 
 // 轮询：等待 /match 后台任务下载弹幕入库，确认 comment 有内容才返回
@@ -203,16 +227,19 @@ async function searchDanmu(params) {
         console.log(`[Miska] 搜索异常: ${e}`);
     }
 
-    // 2) 库内无结果，触发匹配 + 轮询等待
-    console.log(`[Miska] 库内无匹配: ${title}，触发匹配下载（超时 ${timeout}s）`);
-    fireMatch(server, title, params.season, episode);
-
-    const pollResult = await pollLibrary(server, title, episode, tmdbId, timeout);
-    if (pollResult) {
-        const animes = processAnimes(pollResult);
-        if (animes.length > 0) {
-            console.log(`[Miska] 匹配后找到 ${animes.length} 个番剧`);
-            return { animes };
+    // 2) 库内无结果：匹配 → 触发后备搜索 → 轮询等待下载
+    console.log(`[Miska] 库内无匹配: ${title}`);
+    const matchResult = await awaitMatch(server, title, params.season, episode, timeout);
+    if (matchResult !== "miss") {
+        // matched 或 timeout：匹配已/将在后台完成，触发下载并轮询
+        await triggerDownload(server, title);
+        const pollResult = await pollLibrary(server, title, episode, tmdbId, timeout);
+        if (pollResult) {
+            const animes = processAnimes(pollResult);
+            if (animes.length > 0) {
+                console.log(`[Miska] 匹配后找到 ${animes.length} 个番剧`);
+                return { animes };
+            }
         }
     }
 
