@@ -5,7 +5,7 @@
 WidgetMetadata = {
     id: "miska.danmu",
     title: "Miska 弹幕",
-    version: "1.3.0",
+    version: "1.4.0",
     requiredVersion: "0.0.2",
     description: "从 Miska 弹幕服务器获取弹幕数据，支持搜索番剧、获取分集列表和弹幕内容",
     author: "Forward-Danmu",
@@ -75,8 +75,8 @@ function buildUrl(server, path, query) {
     return url;
 }
 
-// 触发 Miska 匹配/下载管道（fire-and-forget）
-function triggerMatch(server, title, season, episode) {
+// 调用 Miska /match 端点，等待匹配完成
+async function awaitMatch(server, title, season, episode) {
     const base = server.replace(/\/+$/, "");
     const matchUrl = `${base}/match`;
     let fileName = title;
@@ -87,10 +87,18 @@ function triggerMatch(server, title, season, episode) {
     } else if (e > 0) {
         fileName = `${title} 第${e}集`;
     }
-    console.log(`[Miska] 触发匹配: ${fileName}`);
-    Widget.http.post(matchUrl, { fileName }, { headers: requestHeaders })
-        .then(res => console.log(`[Miska] 匹配响应: isMatched=${res && res.data ? res.data.isMatched : "?"}`))
-        .catch(err => console.log(`[Miska] 匹配触发异常: ${err}`));
+    console.log(`[Miska] 匹配: ${fileName}`);
+    try {
+        const res = await Widget.http.post(matchUrl, { fileName }, { headers: requestHeaders });
+        if (res && res.data && res.data.isMatched) {
+            console.log(`[Miska] 匹配成功`);
+            return true;
+        }
+        console.log(`[Miska] 匹配未命中`);
+    } catch (err) {
+        console.log(`[Miska] 匹配异常: ${err}`);
+    }
+    return false;
 }
 
 const requestHeaders = {
@@ -129,10 +137,18 @@ async function searchDanmu(params) {
     console.log(`[Miska] 搜索: ${epUrl}`);
 
     try {
-        const response = await Widget.http.get(epUrl, { headers: requestHeaders });
+        let response = await Widget.http.get(epUrl, { headers: requestHeaders });
         if (!response || !response.data || !response.data.animes || !response.data.animes.length) {
             console.log(`[Miska] 库内无匹配: ${title}`);
-            triggerMatch(server, title, params.season, episode);
+            // 触发匹配下载，等待完成后重新搜库
+            const matched = await awaitMatch(server, title, params.season, episode);
+            if (matched) {
+                response = await Widget.http.get(epUrl, { headers: requestHeaders });
+            } else {
+                return { animes: [] };
+            }
+        }
+        if (!response || !response.data || !response.data.animes || !response.data.animes.length) {
             return { animes: [] };
         }
 
@@ -160,7 +176,6 @@ async function searchDanmu(params) {
         return { animes };
     } catch (e) {
         console.log(`[Miska] 搜索异常: ${e}`);
-        triggerMatch(server, title, params.season, episode);
         return { animes: [] };
     }
 }
