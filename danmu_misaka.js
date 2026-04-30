@@ -5,7 +5,7 @@
 WidgetMetadata = {
     id: "miska.danmu",
     title: "Miska 弹幕",
-    version: "1.2.0",
+    version: "1.3.0",
     requiredVersion: "0.0.2",
     description: "从 Miska 弹幕服务器获取弹幕数据，支持搜索番剧、获取分集列表和弹幕内容",
     author: "Forward-Danmu",
@@ -75,6 +75,24 @@ function buildUrl(server, path, query) {
     return url;
 }
 
+// 触发 Miska 匹配/下载管道（fire-and-forget）
+function triggerMatch(server, title, season, episode) {
+    const base = server.replace(/\/+$/, "");
+    const matchUrl = `${base}/match`;
+    let fileName = title;
+    const s = parseInt(season) || 0;
+    const e = parseInt(episode) || 0;
+    if (s > 0 && e > 0) {
+        fileName = `${title} S${String(s).padStart(2, "0")}E${String(e).padStart(2, "0")}`;
+    } else if (e > 0) {
+        fileName = `${title} 第${e}集`;
+    }
+    console.log(`[Miska] 触发匹配: ${fileName}`);
+    Widget.http.post(matchUrl, { fileName }, { headers: requestHeaders })
+        .then(res => console.log(`[Miska] 匹配响应: isMatched=${res && res.data ? res.data.isMatched : "?"}`))
+        .catch(err => console.log(`[Miska] 匹配触发异常: ${err}`));
+}
+
 const requestHeaders = {
     "Content-Type": "application/json",
     "User-Agent": "ForwardWidgets/1.0.0"
@@ -114,6 +132,7 @@ async function searchDanmu(params) {
         const response = await Widget.http.get(epUrl, { headers: requestHeaders });
         if (!response || !response.data || !response.data.animes || !response.data.animes.length) {
             console.log(`[Miska] 库内无匹配: ${title}`);
+            triggerMatch(server, title, params.season, episode);
             return { animes: [] };
         }
 
@@ -141,6 +160,7 @@ async function searchDanmu(params) {
         return { animes };
     } catch (e) {
         console.log(`[Miska] 搜索异常: ${e}`);
+        triggerMatch(server, title, params.season, episode);
         return { animes: [] };
     }
 }
