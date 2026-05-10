@@ -4,7 +4,7 @@
 WidgetMetadata = {
   id: "misaka.auto.danmu",
   title: "Misaka 自动弹幕",
-  version: "0.1.0",
+  version: "0.1.1",
   requiredVersion: "0.0.2",
   description: "自动适配 Misaka/dandanplay 兼容接口，支持 match、后备搜索、异步弹幕任务轮询",
   author: "Forward-Danmu",
@@ -24,6 +24,16 @@ WidgetMetadata = {
     {
       name: "autoMatch",
       title: "自动匹配当前集",
+      type: "enumeration",
+      value: "true",
+      enumOptions: [
+        { title: "开启", value: "true" },
+        { title: "关闭", value: "false" }
+      ]
+    },
+    {
+      name: "prefetchOnSearch",
+      title: "搜索时预下载当前集",
       type: "enumeration",
       value: "true",
       enumOptions: [
@@ -292,6 +302,22 @@ async function searchDanmu(params) {
   const server = normalizeServer(params.server);
   if (!server) return { animes: [] };
 
+  if (boolParam(params.autoMatch, true)) {
+    const match = await runMatch(server, params);
+    if (match && match.episodeId) {
+      const anime = animeFromMatch(match);
+      await writeAnimeCacheEntry(anime);
+      if (boolParam(params.prefetchOnSearch, true)) {
+        try {
+          await fetchCommentsWithPolling(server, match.episodeId, params);
+        } catch (e) {
+          console.log(`[Misaka] 搜索阶段预下载失败: ${e.message || e}`);
+        }
+      }
+      return { animes: [anime] };
+    }
+  }
+
   let animes = await searchMisakaAnimes(server, params);
   if (animes.length > 0) {
     animes = animes.slice().sort((a, b) => {
@@ -301,6 +327,27 @@ async function searchDanmu(params) {
     for (const anime of animes) await writeAnimeCacheEntry(anime);
   }
   return { animes };
+}
+
+function animeFromMatch(match) {
+  return {
+    animeId: match.animeId,
+    bangumiId: match.animeId ? `A${match.animeId}` : "",
+    animeTitle: match.animeTitle || "",
+    type: match.type || "tvseries",
+    typeDescription: match.typeDescription || "",
+    imageUrl: match.imageUrl || "",
+    episodeCount: 1,
+    rating: 0,
+    isFavorited: false,
+    episodes: [
+      {
+        episodeId: match.episodeId,
+        episodeTitle: match.episodeTitle || "",
+        episodeNumber: String(match.episodeNumber || "")
+      }
+    ]
+  };
 }
 
 function buildFallbackEpisodes(anime, params) {
