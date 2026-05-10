@@ -4,7 +4,7 @@
 WidgetMetadata = {
   id: "misaka.auto.danmu",
   title: "Misaka 自动弹幕",
-  version: "0.1.4",
+  version: "0.1.5",
   requiredVersion: "0.0.2",
   description: "自动适配 Misaka/dandanplay 兼容接口，支持 match、后备搜索、异步弹幕任务轮询",
   author: "Forward-Danmu",
@@ -33,7 +33,7 @@ WidgetMetadata = {
     },
     {
       name: "prefetchOnSearch",
-      title: "搜索时预下载当前集",
+      title: "搜索时触发当前集下载",
       type: "enumeration",
       value: "true",
       enumOptions: [
@@ -43,6 +43,7 @@ WidgetMetadata = {
     },
     { name: "searchTimeout", title: "搜索超时（秒）", type: "input", value: "90" },
     { name: "detailTimeout", title: "详情超时（秒）", type: "input", value: "90" },
+    { name: "prefetchTimeout", title: "触发下载请求超时（秒）", type: "input", value: "60" },
     { name: "taskPollTimeout", title: "弹幕任务轮询超时（秒）", type: "input", value: "180" },
     { name: "taskPollInterval", title: "弹幕任务轮询间隔（秒）", type: "input", value: "3" },
     {
@@ -305,7 +306,7 @@ async function searchDanmu(params) {
   const episodeResult = await searchEpisodesForPlayback(server, params);
   if (episodeResult && episodeResult.episodeId) {
     if (boolParam(params.prefetchOnSearch, true)) {
-      startCommentPrefetch(server, episodeResult.episodeId, params);
+      await triggerCommentDownload(server, episodeResult.episodeId, params);
     }
     return { animes: episodeResult.animes };
   }
@@ -316,7 +317,7 @@ async function searchDanmu(params) {
       const anime = animeFromMatch(match);
       await writeAnimeCacheEntry(anime);
       if (boolParam(params.prefetchOnSearch, true)) {
-        startCommentPrefetch(server, match.episodeId, params);
+        await triggerCommentDownload(server, match.episodeId, params);
       }
       return { animes: [anime] };
     }
@@ -380,20 +381,16 @@ function animeFromMatch(match) {
   };
 }
 
-function startCommentPrefetch(server, episodeId, params) {
+async function triggerCommentDownload(server, episodeId, params) {
   try {
-    const request = fetchCommentsOnce(server, episodeId, params || {}, true);
-    if (request && typeof request.then === "function") {
-      request.then((data) => {
-        if (data && data.taskId) {
-          console.log(`[Misaka] 搜索阶段已触发弹幕下载任务: ${data.taskId}`);
-        }
-      }).catch((e) => {
-        console.log(`[Misaka] 搜索阶段预下载失败: ${e.message || e}`);
-      });
+    const data = await fetchCommentsOnce(server, episodeId, Object.assign({}, params, {
+      commentTimeout: params.prefetchTimeout || params.commentTimeout || 60
+    }), false);
+    if (data && data.comments) {
+      console.log(`[Misaka] 搜索阶段触发弹幕下载完成: episodeId=${episodeId}, count=${data.count || 0}`);
     }
   } catch (e) {
-    console.log(`[Misaka] 搜索阶段预下载启动失败: ${e.message || e}`);
+    console.log(`[Misaka] 搜索阶段触发弹幕下载失败: ${e.message || e}`);
   }
 }
 
