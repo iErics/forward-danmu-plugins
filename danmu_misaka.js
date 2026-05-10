@@ -4,7 +4,7 @@
 WidgetMetadata = {
   id: "misaka.auto.danmu",
   title: "Misaka 自动弹幕",
-  version: "0.1.6",
+  version: "0.1.7",
   requiredVersion: "0.0.2",
   description: "自动适配 Misaka/dandanplay 兼容接口，支持 match、后备搜索、异步弹幕任务轮询",
   author: "Forward-Danmu",
@@ -72,6 +72,8 @@ const REQUEST_HEADERS = {
   "User-Agent": "ForwardWidgets/1.0.0"
 };
 
+const PLUGIN_VERSION = "0.1.7";
+
 const ANIME_CACHE_KEY = "misaka_auto_anime_cache";
 
 function toInt(value, fallback) {
@@ -132,18 +134,25 @@ function responseData(response) {
   return data;
 }
 
-async function httpGetJson(url, timeoutSec) {
+function requestHeaders(stage) {
+  const headers = Object.assign({}, REQUEST_HEADERS);
+  headers["X-FW-Misaka-Version"] = PLUGIN_VERSION;
+  headers["X-FW-Misaka-Stage"] = stage || "unknown";
+  return headers;
+}
+
+async function httpGetJson(url, timeoutSec, stage) {
   const response = await withTimeout(
-    Widget.http.get(url, { headers: REQUEST_HEADERS }),
+    Widget.http.get(url, { headers: requestHeaders(stage) }),
     timeoutSec,
     url
   );
   return responseData(response);
 }
 
-async function httpPostJson(url, body, timeoutSec) {
+async function httpPostJson(url, body, timeoutSec, stage) {
   const response = await withTimeout(
-    Widget.http.post(url, body, { headers: REQUEST_HEADERS }),
+    Widget.http.post(url, body, { headers: requestHeaders(stage) }),
     timeoutSec,
     url
   );
@@ -271,7 +280,8 @@ async function runMatch(server, params) {
         videoDuration: toInt(params.videoDuration || params.runtime, 0),
         matchMode: params.matchMode || "fileNameOnly"
       },
-      params.matchTimeout || 45
+      params.matchTimeout || 45,
+      "match"
     );
     if (data && data.isMatched && data.matches && data.matches.length > 0) {
       console.log(`[Misaka] 自动匹配成功: episodeId=${data.matches[0].episodeId}`);
@@ -288,7 +298,7 @@ async function searchMisakaAnimes(server, params) {
   for (const keyword of buildSearchKeywords(params)) {
     try {
       console.log(`[Misaka] 后备搜索: ${keyword}`);
-      const data = await httpGetJson(buildEndpoint(server, "search/anime", { keyword }), timeout);
+      const data = await httpGetJson(buildEndpoint(server, "search/anime", { keyword }), timeout, "search-anime");
       if (data && data.success !== false && data.animes && data.animes.length > 0) {
         return data.animes;
       }
@@ -333,7 +343,7 @@ async function searchEpisodesForPlayback(server, params) {
   try {
     const data = await httpGetJson(buildEndpoint(server, "search/episodes", {
       anime: title
-    }), params.episodeSearchTimeout || 15);
+    }), params.episodeSearchTimeout || 15, "search-episodes");
     const animes = data && data.success !== false && data.animes ? data.animes : [];
     const targetEpisode = toInt(params.episode, 0);
     for (const anime of animes) {
@@ -408,7 +418,7 @@ async function getDetailById(params) {
   const bangumiId = String(params.bangumiId || (String(animeId).startsWith("A") ? animeId : `A${animeId}`));
   try {
     console.log(`[Misaka] 获取详情: ${bangumiId}`);
-    const data = await httpGetJson(buildEndpoint(server, `bangumi/${bangumiId}`), params.detailTimeout || 90);
+    const data = await httpGetJson(buildEndpoint(server, `bangumi/${bangumiId}`), params.detailTimeout || 90, "bangumi");
     const episodes = data && data.bangumi && data.bangumi.episodes ? data.bangumi.episodes : [];
     if (episodes.length > 0) {
       const currentEpisode = toInt(params.episode, 0);
@@ -454,7 +464,7 @@ async function fetchCommentsOnce(server, episodeId, params, asyncMode) {
     withRelated: "true",
     chConvert: params.chConvert || "0",
     async: asyncMode ? "1" : ""
-  }), params.commentTimeout || 45);
+  }), params.commentTimeout || 45, asyncMode ? "comment-async" : "comment");
 }
 
 async function pollTaskComment(server, taskId, params) {
@@ -464,7 +474,7 @@ async function pollTaskComment(server, taskId, params) {
   let last = null;
 
   while (Date.now() <= deadline) {
-    last = await httpGetJson(buildEndpoint(server, `taskcomment/${taskId}`), params.taskPollRequestTimeout || 15);
+    last = await httpGetJson(buildEndpoint(server, `taskcomment/${taskId}`), params.taskPollRequestTimeout || 15, "taskcomment");
     if (last && last.status === "completed") return last;
     if (last && last.status === "failed") return last;
     if (intervalMs > 0) await sleep(intervalMs);
