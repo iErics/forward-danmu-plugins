@@ -4,7 +4,7 @@
 WidgetMetadata = {
   id: "misaka.auto.danmu",
   title: "Misaka 自动弹幕",
-  version: "0.1.7",
+  version: "0.1.8",
   requiredVersion: "0.0.2",
   description: "自动适配 Misaka/dandanplay 兼容接口，支持 match、后备搜索、异步弹幕任务轮询",
   author: "Forward-Danmu",
@@ -41,6 +41,16 @@ WidgetMetadata = {
         { title: "关闭", value: "false" }
       ]
     },
+    {
+      name: "fallbackSearch",
+      title: "自动路径兜底搜索",
+      type: "enumeration",
+      value: "false",
+      enumOptions: [
+        { title: "关闭", value: "false" },
+        { title: "开启", value: "true" }
+      ]
+    },
     { name: "searchTimeout", title: "搜索超时（秒）", type: "input", value: "90" },
     { name: "detailTimeout", title: "详情超时（秒）", type: "input", value: "90" },
     { name: "prefetchTimeout", title: "触发下载请求超时（秒）", type: "input", value: "60" },
@@ -72,7 +82,7 @@ const REQUEST_HEADERS = {
   "User-Agent": "ForwardWidgets/1.0.0"
 };
 
-const PLUGIN_VERSION = "0.1.7";
+const PLUGIN_VERSION = "0.1.8";
 
 const ANIME_CACHE_KEY = "misaka_auto_anime_cache";
 
@@ -325,6 +335,10 @@ async function searchDanmu(params) {
     }
   }
 
+  if (!boolParam(params.fallbackSearch, false)) {
+    return { animes: [] };
+  }
+
   let animes = await searchMisakaAnimes(server, params);
   if (animes.length > 0) {
     animes = animes.slice().sort((a, b) => {
@@ -442,6 +456,8 @@ async function resolveEpisodeIdForPlayback(server, params) {
 
   const episodeResult = await searchEpisodesForPlayback(server, params);
   if (episodeResult && episodeResult.episodeId) return episodeResult.episodeId;
+
+  if (!boolParam(params.fallbackSearch, false)) return null;
 
   const animes = await searchMisakaAnimes(server, params);
   const best = chooseBestAnime(animes, params);
