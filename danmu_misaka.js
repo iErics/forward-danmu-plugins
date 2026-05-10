@@ -5,7 +5,7 @@
 WidgetMetadata = {
     id: "miska.danmu",
     title: "Miska 弹幕",
-    version: "1.7.0",
+    version: "1.8.0",
     requiredVersion: "0.0.2",
     description: "从 Miska 弹幕服务器获取弹幕数据，支持搜索番剧、获取分集列表和弹幕内容",
     author: "Forward-Danmu",
@@ -172,6 +172,9 @@ async function pollLibrary(server, title, episode, tmdbId, timeoutSec) {
     return null;
 }
 
+// 整季匹配缓存：key = "title_season"，已成功匹配的季无需重复调 /match
+const seasonMatched = new Map();
+
 const requestHeaders = {
     "Content-Type": "application/json",
     "User-Agent": "ForwardWidgets/1.0.0"
@@ -245,7 +248,19 @@ async function searchDanmu(params) {
 
     // 2) 库内无结果：匹配 → 触发后备搜索 → 轮询等待下载
     console.log(`[Miska] 库内无匹配: ${title}`);
-    const matchResult = await awaitMatch(server, title, params.season, episode, matchWait);
+    const seasonKey = `${title}_${params.season || 0}`;
+
+    let matchResult;
+    if (seasonMatched.has(seasonKey)) {
+        console.log(`[Miska] 整季缓存命中: ${seasonKey}，跳过 /match`);
+        matchResult = "matched";
+    } else {
+        matchResult = await awaitMatch(server, title, params.season, episode, matchWait);
+        if (matchResult !== "miss") {
+            seasonMatched.set(seasonKey, true);
+        }
+    }
+
     if (matchResult !== "miss") {
         // matched 或 timeout：匹配已/将在后台完成，触发下载并轮询
         await triggerDownload(server, title);
