@@ -4,7 +4,7 @@
 WidgetMetadata = {
   id: "misaka.auto.danmu",
   title: "Misaka 自动弹幕",
-  version: "0.1.5",
+  version: "0.1.6",
   requiredVersion: "0.0.2",
   description: "自动适配 Misaka/dandanplay 兼容接口，支持 match、后备搜索、异步弹幕任务轮询",
   author: "Forward-Danmu",
@@ -269,7 +269,7 @@ async function runMatch(server, params) {
         fileHash: params.fileHash || "",
         fileSize: toInt(params.fileSize, 0),
         videoDuration: toInt(params.videoDuration || params.runtime, 0),
-        matchMode: "hashAndFileName"
+        matchMode: params.matchMode || "fileNameOnly"
       },
       params.matchTimeout || 45
     );
@@ -302,14 +302,6 @@ async function searchMisakaAnimes(server, params) {
 async function searchDanmu(params) {
   const server = normalizeServer(params.server);
   if (!server) return { animes: [] };
-
-  const episodeResult = await searchEpisodesForPlayback(server, params);
-  if (episodeResult && episodeResult.episodeId) {
-    if (boolParam(params.prefetchOnSearch, true)) {
-      await triggerCommentDownload(server, episodeResult.episodeId, params);
-    }
-    return { animes: episodeResult.animes };
-  }
 
   if (boolParam(params.autoMatch, true)) {
     const match = await runMatch(server, params);
@@ -435,11 +427,11 @@ async function getDetailById(params) {
 }
 
 async function resolveEpisodeIdForPlayback(server, params) {
-  const episodeResult = await searchEpisodesForPlayback(server, params);
-  if (episodeResult && episodeResult.episodeId) return episodeResult.episodeId;
-
   const match = boolParam(params.autoMatch, true) ? await runMatch(server, params) : null;
   if (match && match.episodeId) return match.episodeId;
+
+  const episodeResult = await searchEpisodesForPlayback(server, params);
+  if (episodeResult && episodeResult.episodeId) return episodeResult.episodeId;
 
   const animes = await searchMisakaAnimes(server, params);
   const best = chooseBestAnime(animes, params);
