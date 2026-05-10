@@ -4,7 +4,7 @@
 WidgetMetadata = {
   id: "misaka.auto.danmu",
   title: "Misaka 自动弹幕",
-  version: "0.1.2",
+  version: "0.1.4",
   requiredVersion: "0.0.2",
   description: "自动适配 Misaka/dandanplay 兼容接口，支持 match、后备搜索、异步弹幕任务轮询",
   author: "Forward-Danmu",
@@ -302,6 +302,14 @@ async function searchDanmu(params) {
   const server = normalizeServer(params.server);
   if (!server) return { animes: [] };
 
+  const episodeResult = await searchEpisodesForPlayback(server, params);
+  if (episodeResult && episodeResult.episodeId) {
+    if (boolParam(params.prefetchOnSearch, true)) {
+      startCommentPrefetch(server, episodeResult.episodeId, params);
+    }
+    return { animes: episodeResult.animes };
+  }
+
   if (boolParam(params.autoMatch, true)) {
     const match = await runMatch(server, params);
     if (match && match.episodeId) {
@@ -323,6 +331,32 @@ async function searchDanmu(params) {
     for (const anime of animes) await writeAnimeCacheEntry(anime);
   }
   return { animes };
+}
+
+async function searchEpisodesForPlayback(server, params) {
+  const title = String((params && (params.seriesName || params.title)) || "").trim();
+  if (!title) return null;
+
+  try {
+    const data = await httpGetJson(buildEndpoint(server, "search/episodes", {
+      anime: title
+    }), params.episodeSearchTimeout || 15);
+    const animes = data && data.success !== false && data.animes ? data.animes : [];
+    const targetEpisode = toInt(params.episode, 0);
+    for (const anime of animes) {
+      const episodes = anime.episodes || [];
+      const selected = episodes.find((ep) => {
+        const index = ep.episodeIndex !== undefined ? ep.episodeIndex : ep.episodeNumber;
+        return targetEpisode > 0 ? String(index) === String(targetEpisode) : true;
+      }) || episodes[0];
+      if (selected && selected.episodeId) {
+        return { animes, episodeId: selected.episodeId, episode: selected };
+      }
+    }
+  } catch (e) {
+    console.log(`[Misaka] 分集搜索失败: ${e.message || e}`);
+  }
+  return null;
 }
 
 function animeFromMatch(match) {
@@ -404,6 +438,9 @@ async function getDetailById(params) {
 }
 
 async function resolveEpisodeIdForPlayback(server, params) {
+  const episodeResult = await searchEpisodesForPlayback(server, params);
+  if (episodeResult && episodeResult.episodeId) return episodeResult.episodeId;
+
   const match = boolParam(params.autoMatch, true) ? await runMatch(server, params) : null;
   if (match && match.episodeId) return match.episodeId;
 
