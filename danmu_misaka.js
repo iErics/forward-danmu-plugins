@@ -4,7 +4,7 @@
 WidgetMetadata = {
   id: "misaka.auto.danmu",
   title: "Misaka 自动弹幕",
-  version: "0.1.1",
+  version: "0.1.2",
   requiredVersion: "0.0.2",
   description: "自动适配 Misaka/dandanplay 兼容接口，支持 match、后备搜索、异步弹幕任务轮询",
   author: "Forward-Danmu",
@@ -308,11 +308,7 @@ async function searchDanmu(params) {
       const anime = animeFromMatch(match);
       await writeAnimeCacheEntry(anime);
       if (boolParam(params.prefetchOnSearch, true)) {
-        try {
-          await fetchCommentsWithPolling(server, match.episodeId, params);
-        } catch (e) {
-          console.log(`[Misaka] 搜索阶段预下载失败: ${e.message || e}`);
-        }
+        startCommentPrefetch(server, match.episodeId, params);
       }
       return { animes: [anime] };
     }
@@ -348,6 +344,23 @@ function animeFromMatch(match) {
       }
     ]
   };
+}
+
+function startCommentPrefetch(server, episodeId, params) {
+  try {
+    const request = fetchCommentsOnce(server, episodeId, params || {}, true);
+    if (request && typeof request.then === "function") {
+      request.then((data) => {
+        if (data && data.taskId) {
+          console.log(`[Misaka] 搜索阶段已触发弹幕下载任务: ${data.taskId}`);
+        }
+      }).catch((e) => {
+        console.log(`[Misaka] 搜索阶段预下载失败: ${e.message || e}`);
+      });
+    }
+  } catch (e) {
+    console.log(`[Misaka] 搜索阶段预下载启动失败: ${e.message || e}`);
+  }
 }
 
 function buildFallbackEpisodes(anime, params) {
