@@ -4,7 +4,7 @@
 WidgetMetadata = {
   id: "misaka.auto.danmu",
   title: "Misaka 自动弹幕",
-  version: "0.1.8",
+  version: "0.1.9",
   requiredVersion: "0.0.2",
   description: "自动适配 Misaka/dandanplay 兼容接口，支持 match、后备搜索、异步弹幕任务轮询",
   author: "Forward-Danmu",
@@ -82,7 +82,7 @@ const REQUEST_HEADERS = {
   "User-Agent": "ForwardWidgets/1.0.0"
 };
 
-const PLUGIN_VERSION = "0.1.8";
+const PLUGIN_VERSION = "0.1.9";
 
 const ANIME_CACHE_KEY = "misaka_auto_anime_cache";
 
@@ -403,10 +403,10 @@ async function triggerCommentDownload(server, episodeId, params) {
       commentTimeout: params.prefetchTimeout || params.commentTimeout || 60
     }), false);
     if (data && data.comments) {
-      console.log(`[Misaka] 搜索阶段触发弹幕下载完成: episodeId=${episodeId}, count=${data.count || 0}`);
+      console.log(`[Misaka] 自动触发弹幕下载完成: episodeId=${episodeId}, count=${data.count || 0}`);
     }
   } catch (e) {
-    console.log(`[Misaka] 搜索阶段触发弹幕下载失败: ${e.message || e}`);
+    console.log(`[Misaka] 自动触发弹幕下载失败: ${e.message || e}`);
   }
 }
 
@@ -452,7 +452,12 @@ async function getDetailById(params) {
 
 async function resolveEpisodeIdForPlayback(server, params) {
   const match = boolParam(params.autoMatch, true) ? await runMatch(server, params) : null;
-  if (match && match.episodeId) return match.episodeId;
+  if (match && match.episodeId) {
+    if (boolParam(params.prefetchOnSearch, true)) {
+      await triggerCommentDownload(server, match.episodeId, params);
+    }
+    return match.episodeId;
+  }
 
   const episodeResult = await searchEpisodesForPlayback(server, params);
   if (episodeResult && episodeResult.episodeId) return episodeResult.episodeId;
