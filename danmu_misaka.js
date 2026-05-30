@@ -4,7 +4,7 @@
 WidgetMetadata = {
   id: "misaka.auto.danmu",
   title: "Misaka 自动弹幕",
-  version: "0.2.0",
+  version: "0.2.1",
   requiredVersion: "0.0.2",
   description: "自动适配 Misaka/dandanplay 兼容接口，支持 match、后备搜索、异步弹幕任务轮询",
   author: "Forward-Danmu",
@@ -589,7 +589,10 @@ async function getCommentsById(params) {
     const data = (prefetched && prefetched.comments && prefetched.comments.length > 0)
       ? prefetched
       : await fetchCommentsWithPolling(server, episodeId, params);
-    return postProcessComments(data, params);
+    // Forward 弹幕模块同时接受 {count, comments} 包装对象与纯弹幕数组;
+    // 此处返回纯数组,与官方 segmentDanmuExample.js 的 getCommentsById 行为对齐。
+    const processed = postProcessComments(data, params);
+    return processed && processed.comments ? processed.comments : null;
   } catch (e) {
     console.log(`[Misaka] 获取弹幕失败: ${e.message || e}`);
     return null;
