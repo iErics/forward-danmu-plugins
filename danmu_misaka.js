@@ -4,7 +4,7 @@
 WidgetMetadata = {
   id: "misaka.auto.danmu",
   title: "Misaka 自动弹幕",
-  version: "0.1.9",
+  version: "0.2.0",
   requiredVersion: "0.0.2",
   description: "自动适配 Misaka/dandanplay 兼容接口，支持 match、后备搜索、异步弹幕任务轮询",
   author: "Forward-Danmu",
@@ -82,7 +82,8 @@ const REQUEST_HEADERS = {
   "User-Agent": "ForwardWidgets/1.0.0"
 };
 
-const PLUGIN_VERSION = "0.1.9";
+// 版本号以 WidgetMetadata.version 为唯一来源,避免发版时两处不同步。
+const PLUGIN_VERSION = WidgetMetadata.version;
 
 const ANIME_CACHE_KEY = "misaka_auto_anime_cache";
 
@@ -214,26 +215,33 @@ function generateVirtualEpisodeId(animeId, sourceOrder, episodeNumber) {
   return Number(`25${String(anime).padStart(6, "0")}${String(source).padStart(2, "0")}${String(episode).padStart(4, "0")}`);
 }
 
-function chooseBestAnime(animes, params) {
-  if (!animes || !animes.length) return null;
+// 对单个条目按目标信息打分,分值越高匹配度越好。
+// 维度:类型(电影/剧集)一致、标题精确/包含匹配、集数覆盖、年份命中、库内来源标记。
+function scoreAnime(anime, params) {
   const target = normalizeTitle((params && (params.seriesName || params.title)) || "");
   const wantMovie = isMovieType(params && params.type);
   const episode = toInt(params && params.episode, 0);
   const year = getYear(params);
 
+  let score = 0;
+  const animeTitle = normalizeTitle(anime.animeTitle || "");
+  const animeIsMovie = isMovieType(anime.type);
+  if (wantMovie === animeIsMovie) score += 60;
+  if (target && animeTitle === target) score += 80;
+  else if (target && animeTitle.includes(target)) score += 55;
+  else if (target && target.includes(animeTitle)) score += 35;
+  if (episode > 0 && toInt(anime.episodeCount, 0) >= episode) score += 25;
+  if (year && String(anime.year || anime.startDate || "").includes(year)) score += 20;
+  if (String(anime.animeTitle || "").includes("来源：")) score += 5;
+  return score;
+}
+
+function chooseBestAnime(animes, params) {
+  if (!animes || !animes.length) return null;
   let best = null;
   let bestScore = -Infinity;
   for (const anime of animes) {
-    let score = 0;
-    const animeTitle = normalizeTitle(anime.animeTitle || "");
-    const animeIsMovie = isMovieType(anime.type);
-    if (wantMovie === animeIsMovie) score += 60;
-    if (target && animeTitle === target) score += 80;
-    else if (target && animeTitle.includes(target)) score += 55;
-    else if (target && target.includes(animeTitle)) score += 35;
-    if (episode > 0 && toInt(anime.episodeCount, 0) >= episode) score += 25;
-    if (year && String(anime.year || anime.startDate || "").includes(year)) score += 20;
-    if (String(anime.animeTitle || "").includes("来源：")) score += 5;
+    const score = scoreAnime(anime, params);
     if (score > bestScore) {
       bestScore = score;
       best = anime;
@@ -341,10 +349,11 @@ async function searchDanmu(params) {
 
   let animes = await searchMisakaAnimes(server, params);
   if (animes.length > 0) {
-    animes = animes.slice().sort((a, b) => {
-      const best = chooseBestAnime([a, b], params);
-      return best === a ? -1 : 1;
-    });
+    // 先一次性算分,再按分数降序;避免比较器内重复打分,且保证排序结果稳定一致。
+    animes = animes
+      .map((anime) => ({ anime, score: scoreAnime(anime, params) }))
+      .sort((a, b) => b.score - a.score)
+      .map((item) => item.anime);
     for (const anime of animes) await writeAnimeCacheEntry(anime);
   }
   return { animes };
@@ -405,9 +414,11 @@ async function triggerCommentDownload(server, episodeId, params) {
     if (data && data.comments) {
       console.log(`[Misaka] 自动触发弹幕下载完成: episodeId=${episodeId}, count=${data.count || 0}`);
     }
+    return data;
   } catch (e) {
     console.log(`[Misaka] 自动触发弹幕下载失败: ${e.message || e}`);
   }
+  return null;
 }
 
 function buildFallbackEpisodes(anime, params) {
@@ -453,14 +464,16 @@ async function getDetailById(params) {
 async function resolveEpisodeIdForPlayback(server, params) {
   const match = boolParam(params.autoMatch, true) ? await runMatch(server, params) : null;
   if (match && match.episodeId) {
+    // 同步预热触发 Misaka 下载,并复用其返回的弹幕,避免随后重复请求一次。
+    let comments = null;
     if (boolParam(params.prefetchOnSearch, true)) {
-      await triggerCommentDownload(server, match.episodeId, params);
+      comments = await triggerCommentDownload(server, match.episodeId, params);
     }
-    return match.episodeId;
+    return { episodeId: match.episodeId, comments };
   }
 
   const episodeResult = await searchEpisodesForPlayback(server, params);
-  if (episodeResult && episodeResult.episodeId) return episodeResult.episodeId;
+  if (episodeResult && episodeResult.episodeId) return { episodeId: episodeResult.episodeId, comments: null };
 
   if (!boolParam(params.fallbackSearch, false)) return null;
 
@@ -475,9 +488,9 @@ async function resolveEpisodeIdForPlayback(server, params) {
   }));
   const targetEpisode = toInt(params.episode, 1);
   const selected = episodes.find((ep) => String(ep.episodeNumber || "") === String(targetEpisode)) || episodes[0];
-  if (selected && selected.episodeId) return selected.episodeId;
+  if (selected && selected.episodeId) return { episodeId: selected.episodeId, comments: null };
 
-  return generateVirtualEpisodeId(best.animeId, 1, targetEpisode);
+  return { episodeId: generateVirtualEpisodeId(best.animeId, 1, targetEpisode), comments: null };
 }
 
 async function fetchCommentsOnce(server, episodeId, params, asyncMode) {
@@ -558,8 +571,13 @@ async function getCommentsById(params) {
   if (!server) return null;
 
   let episodeId = params.commentId;
+  let prefetched = null;
   if (!episodeId) {
-    episodeId = await resolveEpisodeIdForPlayback(server, params);
+    const resolved = await resolveEpisodeIdForPlayback(server, params);
+    if (resolved) {
+      episodeId = resolved.episodeId;
+      prefetched = resolved.comments;
+    }
   }
   if (!episodeId) {
     console.log("[Misaka] 无法自动解析当前集 episodeId");
@@ -567,10 +585,36 @@ async function getCommentsById(params) {
   }
 
   try {
-    const data = await fetchCommentsWithPolling(server, episodeId, params);
+    // 预热阶段已同步下载到弹幕时直接复用,否则走异步获取 + 任务轮询。
+    const data = (prefetched && prefetched.comments && prefetched.comments.length > 0)
+      ? prefetched
+      : await fetchCommentsWithPolling(server, episodeId, params);
     return postProcessComments(data, params);
   } catch (e) {
     console.log(`[Misaka] 获取弹幕失败: ${e.message || e}`);
     return null;
   }
+}
+
+// 仅在 Node(CommonJS)环境下导出纯函数供单元测试使用;
+// Forward 运行时不存在 module 对象,此块不会执行,对插件加载无影响。
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    toInt,
+    boolParam,
+    normalizeServer,
+    buildEndpoint,
+    normalizeTitle,
+    getYear,
+    isMovieType,
+    buildMatchFileName,
+    generateVirtualEpisodeId,
+    scoreAnime,
+    chooseBestAnime,
+    buildSearchKeywords,
+    animeFromMatch,
+    buildFallbackEpisodes,
+    parseBlockKeywords,
+    postProcessComments
+  };
 }
