@@ -4,7 +4,7 @@
 WidgetMetadata = {
   id: "misaka.auto.danmu",
   title: "Misaka 自动弹幕",
-  version: "0.2.1",
+  version: "0.2.2",
   requiredVersion: "0.0.2",
   description: "自动适配 Misaka/dandanplay 兼容接口，支持 match、后备搜索、异步弹幕任务轮询",
   author: "Forward-Danmu",
@@ -45,10 +45,10 @@ WidgetMetadata = {
       name: "fallbackSearch",
       title: "自动路径兜底搜索",
       type: "enumeration",
-      value: "false",
+      value: "true",
       enumOptions: [
-        { title: "关闭", value: "false" },
-        { title: "开启", value: "true" }
+        { title: "开启", value: "true" },
+        { title: "关闭", value: "false" }
       ]
     },
     { name: "searchTimeout", title: "搜索超时（秒）", type: "input", value: "90" },
